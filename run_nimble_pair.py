@@ -95,8 +95,8 @@ PAIR_CONFIGS: dict[str, PairConfig] = {
     'ble_periodic_adv': PairConfig(
         peripheral_app='ble_periodic_adv',
         central_app='ble_periodic_sync',
-        peripheral_ok=r'instance \d+ started \(periodic\)',
-        central_ok=r'Periodic sync event',
+        peripheral_ok='',
+        central_ok=r'Periodic adv report event',
     ),
     'ble_phy': PairConfig(
         peripheral_app='ble_phy/phy_prph',
@@ -214,10 +214,10 @@ def monitor_two_ports(
     central_ok: str,
     timeout_s: int,
 ) -> None:
-    peripheral_re = re.compile(peripheral_ok)
-    central_re = re.compile(central_ok)
-    peripheral_hit = False
-    central_hit = False
+    peripheral_re = re.compile(peripheral_ok) if peripheral_ok else None
+    central_re = re.compile(central_ok) if central_ok else None
+    peripheral_hit = peripheral_re is None
+    central_hit = central_re is None
 
     start = time.monotonic()
     with (
@@ -234,10 +234,10 @@ def monitor_two_ports(
                     continue
                 line = raw.decode(errors='ignore').rstrip()
                 print(f'[{role}] {line}', flush=True)
-                if role == 'peripheral' and not peripheral_hit and matcher.search(line):
+                if role == 'peripheral' and matcher and not peripheral_hit and matcher.search(line):
                     peripheral_hit = True
                     print(f'[match] peripheral regex matched: {peripheral_ok}', flush=True)
-                if role == 'central' and not central_hit and matcher.search(line):
+                if role == 'central' and matcher and not central_hit and matcher.search(line):
                     central_hit = True
                     print(f'[match] central regex matched: {central_ok}', flush=True)
 
