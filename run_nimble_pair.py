@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -18,7 +19,18 @@ except ImportError as e:
     raise SystemExit('Missing dependency: pyserial. Install with `pip install pyserial`.') from e
 
 
-NIMBLE_DIR = Path(__file__).resolve().parent
+def resolve_nimble_dir() -> Path:
+    idf_path = os.environ.get('IDF_PATH', '').strip()
+    if not idf_path:
+        raise SystemExit('IDF_PATH is not set. Run `source export.sh` first.')
+
+    nimble_dir = Path(idf_path).expanduser().resolve() / 'examples' / 'bluetooth' / 'nimble'
+    if not nimble_dir.is_dir():
+        raise SystemExit(f'NimBLE examples directory not found: {nimble_dir}')
+    return nimble_dir
+
+
+NIMBLE_DIR = resolve_nimble_dir()
 
 
 @dataclass(frozen=True)

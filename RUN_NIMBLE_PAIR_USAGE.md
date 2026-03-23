@@ -25,6 +25,13 @@ It supports two validation modes:
 - Two DUTs connected over serial (for example `/dev/ttyUSB0` and `/dev/ttyUSB1`)
 - Correct target known (`esp32`, `esp32c3`, `esp32c6`, etc.)
 
+Path resolution behavior:
+
+- The script resolves NimBLE examples from:
+  - `$IDF_PATH/examples/bluetooth/nimble`
+- You can run the script from any current working directory.
+- `IDF_PATH` must be set (via `source export.sh`).
+
 ## 2. List Supported Pairs
 
 ```bash
