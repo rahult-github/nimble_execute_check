@@ -28,6 +28,9 @@ class PairConfig:
     peripheral_ok: str
     central_ok: str
     timeout_s: int = 90
+    require_full_window: bool = False
+    min_central_matches: int = 1
+    max_central_gap_s: int | None = None
 
 
 PAIR_CONFIGS: dict[str, PairConfig] = {
@@ -46,8 +49,12 @@ PAIR_CONFIGS: dict[str, PairConfig] = {
     'ble_cte': PairConfig(
         peripheral_app='ble_cte/ble_periodic_adv_with_cte',
         central_app='ble_cte/ble_periodic_sync_with_cte',
-        peripheral_ok=r'Instance \d+ started \(periodic\)',
-        central_ok=r'Periodic Sync Established',
+        peripheral_ok='',
+        central_ok=r'IQ Report \| Sync Handle:',
+        timeout_s=60,
+        require_full_window=True,
+        min_central_matches=5,
+        max_central_gap_s=10,
     ),
     'ble_cts': PairConfig(
         peripheral_app='ble_cts/cts_prph',
@@ -83,14 +90,22 @@ PAIR_CONFIGS: dict[str, PairConfig] = {
     'ble_pawr_adv': PairConfig(
         peripheral_app='ble_pawr_adv/ble_pawr_adv',
         central_app='ble_pawr_adv/ble_pawr_sync',
-        peripheral_ok=r'instance \d+ started \(periodic\)',
-        central_ok=r'\[Periodic Sync Established\]',
+        peripheral_ok='',
+        central_ok=r'\[Periodic Adv Report\]',
+        timeout_s=60,
+        require_full_window=True,
+        min_central_matches=10,
+        max_central_gap_s=10,
     ),
     'ble_pawr_adv_conn': PairConfig(
         peripheral_app='ble_pawr_adv_conn/ble_pawr_adv_conn',
         central_app='ble_pawr_adv_conn/ble_pawr_sync_conn',
-        peripheral_ok=r'\[Connection established\]',
-        central_ok=r'\[Connection established\]',
+        peripheral_ok=r'\[Response\] subevent:',
+        central_ok=r'\[Periodic Adv Report\]',
+        timeout_s=60,
+        require_full_window=True,
+        min_central_matches=10,
+        max_central_gap_s=10,
     ),
     'ble_periodic_adv': PairConfig(
         peripheral_app='ble_periodic_adv',
@@ -213,11 +228,16 @@ def monitor_two_ports(
     peripheral_ok: str,
     central_ok: str,
     timeout_s: int,
+    require_full_window: bool = False,
+    min_central_matches: int = 1,
+    max_central_gap_s: int | None = None,
 ) -> None:
     peripheral_re = re.compile(peripheral_ok) if peripheral_ok else None
     central_re = re.compile(central_ok) if central_ok else None
     peripheral_hit = peripheral_re is None
     central_hit = central_re is None
+    central_match_count = 0
+    last_central_match_ts: float | None = None
 
     start = time.monotonic()
     with (
@@ -225,6 +245,14 @@ def monitor_two_ports(
         serial.Serial(central_port, baudrate=baud, timeout=0.2) as central_ser,
     ):
         while time.monotonic() - start < timeout_s:
+            now = time.monotonic()
+            if require_full_window and max_central_gap_s is not None and last_central_match_ts is not None:
+                if now - last_central_match_ts > max_central_gap_s:
+                    raise RuntimeError(
+                        f'FAIL after {timeout_s}s: central regex stalled for {now - last_central_match_ts:.1f}s '
+                        f'(limit {max_central_gap_s}s): {central_ok}'
+                    )
+
             for role, ser_obj, matcher in (
                 ('peripheral', peripheral_ser, peripheral_re),
                 ('central', central_ser, central_re),
@@ -237,11 +265,14 @@ def monitor_two_ports(
                 if role == 'peripheral' and matcher and not peripheral_hit and matcher.search(line):
                     peripheral_hit = True
                     print(f'[match] peripheral regex matched: {peripheral_ok}', flush=True)
-                if role == 'central' and matcher and not central_hit and matcher.search(line):
-                    central_hit = True
-                    print(f'[match] central regex matched: {central_ok}', flush=True)
+                if role == 'central' and matcher and matcher.search(line):
+                    central_match_count += 1
+                    last_central_match_ts = time.monotonic()
+                    if not central_hit:
+                        central_hit = True
+                        print(f'[match] central regex matched: {central_ok}', flush=True)
 
-            if peripheral_hit and central_hit:
+            if not require_full_window and peripheral_hit and central_hit:
                 print('[result] PASS: both functional checks matched', flush=True)
                 return
 
@@ -250,6 +281,26 @@ def monitor_two_ports(
         missing.append(f'peripheral regex not matched: {peripheral_ok}')
     if not central_hit:
         missing.append(f'central regex not matched: {central_ok}')
+    elif central_match_count < min_central_matches:
+        missing.append(
+            f'central regex matched only {central_match_count} times; '
+            f'min required: {min_central_matches}: {central_ok}'
+        )
+    elif require_full_window and max_central_gap_s is not None and last_central_match_ts is not None:
+        idle_s = time.monotonic() - last_central_match_ts
+        if idle_s > max_central_gap_s:
+            missing.append(
+                f'central regex stopped for {idle_s:.1f}s near end; '
+                f'limit {max_central_gap_s}s: {central_ok}'
+            )
+
+    if require_full_window and not missing:
+        print(
+            f'[result] PASS: full-window check passed; central regex matched {central_match_count} times in {timeout_s}s',
+            flush=True,
+        )
+        return
+
     raise RuntimeError(f'FAIL after {timeout_s}s: ' + '; '.join(missing))
 
 
@@ -291,7 +342,7 @@ def pair_supported_on_target(pair: str, target: str | None) -> bool:
     return True
 
 
-def resolve_pair_cfg(args: argparse.Namespace, pair_name: str) -> tuple[Path, Path, str, str, int]:
+def resolve_pair_cfg(args: argparse.Namespace, pair_name: str) -> tuple[Path, Path, str, str, int, bool, int, int | None]:
     cfg = PAIR_CONFIGS[pair_name]
     peripheral_rel = args.peripheral_app or cfg.peripheral_app
     central_rel = args.central_app or cfg.central_app
@@ -305,11 +356,29 @@ def resolve_pair_cfg(args: argparse.Namespace, pair_name: str) -> tuple[Path, Pa
         raise SystemExit(f'Peripheral app path does not exist: {peripheral_app}')
     if not central_app.is_dir():
         raise SystemExit(f'Central app path does not exist: {central_app}')
-    return peripheral_app, central_app, peripheral_ok, central_ok, timeout_s
+    return (
+        peripheral_app,
+        central_app,
+        peripheral_ok,
+        central_ok,
+        timeout_s,
+        cfg.require_full_window,
+        cfg.min_central_matches,
+        cfg.max_central_gap_s,
+    )
 
 
 def run_single_pair(args: argparse.Namespace, pair_name: str) -> None:
-    peripheral_app, central_app, peripheral_ok, central_ok, timeout_s = resolve_pair_cfg(args, pair_name)
+    (
+        peripheral_app,
+        central_app,
+        peripheral_ok,
+        central_ok,
+        timeout_s,
+        require_full_window,
+        min_central_matches,
+        max_central_gap_s,
+    ) = resolve_pair_cfg(args, pair_name)
     print(f'[pair] {pair_name}')
     print(f'[peripheral_app] {peripheral_app}')
     print(f'[central_app] {central_app}')
@@ -318,6 +387,10 @@ def run_single_pair(args: argparse.Namespace, pair_name: str) -> None:
     print(f'[peripheral_ok] {peripheral_ok}')
     print(f'[central_ok] {central_ok}')
     print(f'[timeout_s] {timeout_s}')
+    if require_full_window:
+        print(f'[full_window] enabled')
+        print(f'[min_central_matches] {min_central_matches}')
+        print(f'[max_central_gap_s] {max_central_gap_s}')
 
     if not args.skip_build_flash:
         build_root = Path(args.build_root).resolve()
@@ -332,6 +405,9 @@ def run_single_pair(args: argparse.Namespace, pair_name: str) -> None:
         peripheral_ok=peripheral_ok,
         central_ok=central_ok,
         timeout_s=timeout_s,
+        require_full_window=require_full_window,
+        min_central_matches=min_central_matches,
+        max_central_gap_s=max_central_gap_s,
     )
 
 

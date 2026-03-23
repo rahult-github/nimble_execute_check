@@ -11,6 +11,11 @@ The script automates:
 3. Monitoring both UART logs
 4. Declaring pass/fail from pair-specific functional log patterns
 
+It supports two validation modes:
+
+- First-match mode: pass as soon as required regex matches are seen.
+- Full-window soak mode: monitor for the entire timeout and pass only if traffic continues.
+
 ## 1. Prerequisites
 
 - ESP-IDF environment exported:
@@ -112,6 +117,11 @@ In this mode:
 --central-ok <regex>         (single pair only)
 ```
 
+Notes:
+
+- `--timeout` overrides the pair default timeout.
+- In full-window soak mode, `--timeout` is the soak duration.
+
 Restrictions:
 
 - Use either `--pair` or `--all-pairs`, not both.
@@ -161,7 +171,35 @@ python examples/bluetooth/nimble/run_nimble_pair.py \
   --clean-build
 ```
 
-## 10. Troubleshooting
+4. Force a 120s soak for one pair:
+```bash
+python examples/bluetooth/nimble/run_nimble_pair.py \
+  --pair ble_cte \
+  --target esp32c5 \
+  --port-peripheral /dev/ttyUSB0 \
+  --port-central /dev/ttyUSB1 \
+  --timeout 120
+```
+
+## 10. Soak-Mode Pairs (Current Defaults)
+
+The following pairs are configured for full-window soak by default:
+
+- `ble_cte`
+  - timeout: `60s`
+  - central regex: `IQ Report \| Sync Handle:`
+  - requires continuing matches across window (gap limit 10s)
+- `ble_pawr_adv`
+  - timeout: `60s`
+  - central regex: `\[Periodic Adv Report\]`
+  - requires continuing matches across window (gap limit 10s)
+- `ble_pawr_adv_conn`
+  - timeout: `60s`
+  - peripheral regex: `\[Response\] subevent:`
+  - central regex: `\[Periodic Adv Report\]`
+  - requires continuing central matches across window (gap limit 10s)
+
+## 11. Troubleshooting
 
 1. `invalid choice` for `--pair`
 - Run `--list-pairs` and use exact key.
@@ -179,8 +217,11 @@ python examples/bluetooth/nimble/run_nimble_pair.py \
 5. Timeout / regex not matched
 - Increase `--timeout`.
 - Check logs and use `--peripheral-ok` / `--central-ok` for temporary custom validation.
+- For soak-mode pairs, a failure can also mean:
+  - central matches were too sparse, or
+  - central matches stalled longer than the configured gap limit.
 
-## 11. Exit Codes
+## 12. Exit Codes
 
 - `0`: success
 - non-zero: build/flash failure, serial/monitor failure, or validation failure
