@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -235,6 +236,52 @@ ALL_PAIR_KEYS: list[str] = [
 SUPPORTED_TARGETS_CACHE: dict[Path, set[str] | None] = {}
 
 
+class TeeStream:
+    def __init__(self, *streams: object) -> None:
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for s in self.streams:
+            try:
+                s.write(data)
+            except Exception:  # noqa: BLE001
+                pass
+        return len(data)
+
+    def flush(self) -> None:
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def setup_run_logging(args: argparse.Namespace) -> tuple[Path, Path]:
+    results_root = Path.cwd() / 'results'
+    results_root.mkdir(parents=True, exist_ok=True)
+
+    if args.list_pairs:
+        mode = 'list-pairs'
+    elif args.pair:
+        mode = f'pair-{args.pair}'
+    elif args.all_pairs:
+        tgt = args.target or 'unknown-target'
+        mode = f'all-pairs-{tgt}'
+    else:
+        mode = 'run'
+
+    mode = re.sub(r'[^A-Za-z0-9._-]+', '_', mode)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    run_dir = results_root / f'{ts}_{mode}'
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    log_path = run_dir / 'run.log'
+    log_file = log_path.open('w', encoding='utf-8', buffering=1)
+    sys.stdout = TeeStream(sys.__stdout__, log_file)
+    sys.stderr = TeeStream(sys.__stderr__, log_file)
+    return run_dir, log_path
+
+
 def target_to_readme_token(target: str) -> str:
     t = target.strip().lower()
     if t == 'esp32':
@@ -267,7 +314,21 @@ def get_supported_targets_from_readme(app_dir: Path) -> set[str] | None:
 
 def run_cmd(cmd: list[str]) -> None:
     print(f'[cmd] {" ".join(cmd)}', flush=True)
-    subprocess.run(cmd, check=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(line.rstrip('\n'), flush=True)
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
 
 def build_and_flash(app_dir: Path, target: str, port: str, build_root: Path, clean_build: bool) -> None:
@@ -607,6 +668,9 @@ def run_single_pair(args: argparse.Namespace, pair_name: str) -> None:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    run_dir, log_path = setup_run_logging(args)
+    print(f'[results_dir] {run_dir}')
+    print(f'[results_log] {log_path}')
 
     if args.list_pairs:
         for name, cfg in PAIR_CONFIGS.items():
