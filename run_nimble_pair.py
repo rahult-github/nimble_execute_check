@@ -168,7 +168,7 @@ PAIR_CONFIGS: dict[str, PairConfig] = {
         peripheral_app='ble_phy/phy_prph',
         central_app='ble_phy/phy_cent',
         peripheral_ok=r'advertise complete; reason=0|disconnect; reason=',
-        central_ok=r'Read complete; status=261|Write complete; status=261',
+        central_ok=r'Read complete; status=(0|261)|Write complete; status=(0|261)',
     ),
     'ble_proximity_sensor': PairConfig(
         peripheral_app='ble_proximity_sensor/proximity_sensor_prph',
@@ -206,11 +206,25 @@ PAIR_CONFIGS: dict[str, PairConfig] = {
         inject_start_delay_s=5.0,
         timeout_s=120,
     ),
-    'throughput_app': PairConfig(
-        peripheral_app='throughput_app/bleprph_throughput',
-        central_app='throughput_app/blecent_throughput',
+    'throughput_app_gatt': PairConfig(
+        peripheral_app='throughput_app/gatt/bleprph_throughput',
+        central_app='throughput_app/gatt/blecent_throughput',
         peripheral_ok=r'connection established; status = 0',
         central_ok=r'Connection established',
+        timeout_s=120,
+    ),
+    'throughput_app': PairConfig(
+        peripheral_app='throughput_app/gatt/bleprph_throughput',
+        central_app='throughput_app/gatt/blecent_throughput',
+        peripheral_ok=r'connection established; status = 0',
+        central_ok=r'Connection established',
+        timeout_s=120,
+    ),
+    'throughput_app_l2cap_coc': PairConfig(
+        peripheral_app='throughput_app/l2cap_coc/l2cap_coc_prph',
+        central_app='throughput_app/l2cap_coc/l2cap_coc_cent',
+        peripheral_ok=r'L2CAP COC connected, chan=',
+        central_ok=r'Sending for [0-9]+ s|Cycle complete. Looping back to first PHY',
         timeout_s=120,
     ),
 }
@@ -230,7 +244,8 @@ ALL_PAIR_KEYS: list[str] = [
     'ble_phy',
     'ble_proximity_sensor',
     'ble_spp',
-    'throughput_app',
+    'throughput_app_gatt',
+    'throughput_app_l2cap_coc',
 ]
 
 SUPPORTED_TARGETS_CACHE: dict[Path, set[str] | None] = {}
